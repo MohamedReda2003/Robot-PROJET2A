@@ -53,7 +53,7 @@ OpenCV, Python, PyTorch/Ultralytics (YOLOv8), Roboflow/CVAT pour l'annotation, c
 ---
 
 ## 2. Cinématique du bras manipulateur (MGD/MGI)
-
+![Niryo Ned1 DH axes](figures/axes_bras.jfif)
 **Objectif** : documenter et valider les modèles géométriques du bras (déjà construit et fonctionnel) pour permettre son pilotage à partir d'une position cible fournie par la vision, et son intégration logicielle avec l'UGV.
 
 ### Étapes
