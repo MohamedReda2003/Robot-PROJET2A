@@ -21,7 +21,12 @@ robot.move_joints(
     0.0,   # J5
     0.0    # J6
 )
+joints = robot.get_joints()
 
+print("\n=== État actuel des articulations apres depart ===")
+
+for i, angle in enumerate(joints):
+    print(f"J{i + 1} : {angle:.2f} rad")
 time.sleep(2)
 
 # Petite rotation de J1
@@ -34,6 +39,12 @@ robot.move_joints(
     0.0
 )
 
+joints = robot.get_joints()
+
+print("\n=== État actuel des articulations apres rotation de J1 ===")
+
+for i, angle in enumerate(joints):
+    print(f"J{i + 1} : {angle:.2f} rad")
 time.sleep(2)
 
 # Retour
@@ -47,5 +58,10 @@ robot.move_joints(
 )
 
 print("Test terminé")
+joints = robot.get_joints()
 
+print("\n=== État actuel des articulations apres retour ===")
+
+for i, angle in enumerate(joints):
+    print(f"J{i + 1} : {angle:.2f} rad")
 robot.close_connection()
