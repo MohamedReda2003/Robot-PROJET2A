@@ -106,11 +106,25 @@ Python (NumPy, `roboticstoolbox-python`), MATLAB (Robotics System Toolbox) si di
 - **3.5 Validation mécanique**
   Test de charge, test de stabilité (surtout lors des mouvements du bras en extension), test sur terrain réel ou simulé.
 
+- **3.6 Préparation à l'impression 3D des pièces du châssis**
+  Conception et impression des pièces qui enveloppent les composants du châssis et supportent/permettent le mouvement du bras.
+
+  - **Modélisation CAO orientée impression** : concevoir chaque pièce (coque de protection, supports moteurs, embase de fixation du bras, passages de câbles) en tenant compte des contraintes d'impression (pas de surplombs >45° sans support, épaisseur de paroi ≥1.5-2 mm pour la rigidité, arrondis pour éviter les concentrations de contraintes).
+  - **Choix du matériau** : PLA (prototypage rapide, rigide mais cassant), PETG (bon compromis résistance/extérieur, résiste mieux à l'humidité du terrain), ABS ou ASA (meilleure tenue thermique/UV si exposition prolongée au soleil). Privilégier PETG ou ASA pour les pièces extérieures exposées.
+  - **Dimensionnement de l'embase du bras** : vérifier que le point de fixation imprimé supporte le poids et les couples générés par le bras en extension maximale (prévoir renforts, nervures, ou insert métallique/vis noyées si nécessaire).
+  - **Tolérances d'assemblage** : prévoir un jeu (0.2-0.3 mm) sur les pièces emboîtées, et des inserts filetés pour les fixations démontables (vis M3/M4) plutôt que du taraudage direct dans le plastique.
+  - **Découpage en pièces imprimables** : si le châssis dépasse le volume du plateau d'impression, séparer le modèle en sous-pièces avec système d'assemblage (encoches, vis, colle structurale).
+  - **Slicing et paramètres d'impression** : définir hauteur de couche, taux de remplissage (infill 30-50% pour les pièces porteuses, structure en nid d'abeille), nombre de parois, supports nécessaires (Cura, PrusaSlicer, Bambu Studio).
+  - **Impression et post-traitement** : impression des pièces, ébavurage, ponçage si assemblage nécessaire, test d'ajustement à blanc avant montage final.
+  - **Validation** : test de charge statique sur l'embase du bras et sur les zones de fixation moteur avant intégration complète.
+
 ### Livrables
 - Cahier des charges mécanique
 - Fichiers CAO du châssis
+- Fichiers CAO des pièces à imprimer (format STL/STEP) + paramètres de slicing
+- Pièces imprimées et post-traitées
 - Châssis assemblé
-- Rapport de validation (charge, stabilité)
+- Rapport de validation (charge, stabilité, tenue de l'embase du bras)
 
 ---
 
