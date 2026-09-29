@@ -1,7 +1,9 @@
-"""Test matériel : transforme une matrice cible en mouvement des six articulations.
+"""Test matériel : saisit XYZ en cm, calcule la cible puis déplace le bras.
 
 Lancer avec l'interpréteur de l'environnement du projet :
     python test_transform_to_motion.py
+
+L'orientation de l'outil reste fixe selon TOOL_ORIENTATION (rad).
 """
 
 import numpy as np
@@ -12,18 +14,45 @@ from Arm_kinematics import JOINT_LIMITS, mgd, mgi, pose_vec
 
 ROBOT_IP = "10.10.3.156"
 
-# Transformation outil/repère de base (mètres), exemple généré avec
-# mgd([0.1, -0.3, 0.2, 0.0, 0.4, 0.0]).
-# Remplacer cette matrice par la transformation cible souhaitée.
-TARGET_TRANSFORM = np.array(
-    [
-        [0.9505637859221, -0.09983341664683, -0.2940438365519, 0.3487200184068],
-        [0.09537450575679, 0.9950041652780, -0.02950279191918, 0.03498870869648],
-        [0.2955202066613, 0.0, 0.9553364891256, 0.4089726606823],
-        [0.0, 0.0, 0.0, 1.0],
-    ],
-    dtype=float,
-)
+# Orientation outil fixe (roll, pitch, yaw), en radians.
+# Les coordonnées saisies sont exprimées par rapport à la base du robot.
+TOOL_ORIENTATION = (0.0, -0.3, 0.1)
+
+
+def build_target_transform(x_cm, y_cm, z_cm):
+    """Construit la transformation cible à partir de XYZ en centimètres."""
+    xyz_m = np.asarray([x_cm, y_cm, z_cm], dtype=float) / 100.0
+    if not np.isfinite(xyz_m).all():
+        raise ValueError("Les coordonnées doivent être des nombres finis.")
+
+    roll, pitch, yaw = TOOL_ORIENTATION
+    cr, sr = np.cos(roll), np.sin(roll)
+    cp, sp = np.cos(pitch), np.sin(pitch)
+    cy, sy = np.cos(yaw), np.sin(yaw)
+    rotation = np.array(
+        [
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr],
+        ]
+    )
+
+    transform = np.eye(4)
+    transform[:3, :3] = rotation
+    transform[:3, 3] = xyz_m
+    return transform
+
+
+def read_coordinate(name):
+    while True:
+        try:
+            value = float(input(f"Entrez {name} en cm : ").replace(",", "."))
+        except ValueError:
+            print("Valeur invalide : entrez un nombre, par exemple 34.87.")
+            continue
+        if np.isfinite(value):
+            return value
+        print("La coordonnée doit être un nombre fini.")
 
 
 def validate_transform(transform):
@@ -41,11 +70,17 @@ def validate_transform(transform):
 
 
 def main():
-    validate_transform(TARGET_TRANSFORM)
-    target_pose = pose_vec(TARGET_TRANSFORM)
+    print("Saisissez la position cible de l'outil dans le repère de base du robot.")
+    x_cm = read_coordinate("X")
+    y_cm = read_coordinate("Y")
+    z_cm = read_coordinate("Z")
 
-    print("Transformation cible outil/base :")
-    print(TARGET_TRANSFORM)
+    target_transform = build_target_transform(x_cm, y_cm, z_cm)
+    validate_transform(target_transform)
+    target_pose = pose_vec(target_transform)
+
+    print("\nTransformation cible outil/base (translation en mètres) :")
+    print(target_transform)
     print("\nPose cible [x, y, z, roll, pitch, yaw] (m, rad) :")
     print(np.array2string(target_pose, precision=6))
 
@@ -76,6 +111,7 @@ def main():
         print(np.array2string(current_joints, precision=4))
         print("Articulations calculées par le MGI (rad) :")
         print(np.array2string(target_joints, precision=4))
+        print("Position demandée (cm) :", (x_cm, y_cm, z_cm))
 
         if input("\nEnvoyer ce mouvement au robot ? [o/N] ").strip().lower() not in {
             "o",
@@ -94,6 +130,8 @@ def main():
         print(np.array2string(actual_joints, precision=4))
         print("Pose estimée après le mouvement [x, y, z, roll, pitch, yaw] (m, rad) :")
         print(np.array2string(actual_pose, precision=6))
+        print("Position estimée après le mouvement (cm) :")
+        print(np.array2string(actual_pose[:3] * 100.0, precision=2))
         print("Test terminé.")
     finally:
         robot.close_connection()
