@@ -13,6 +13,7 @@ Ce document détaille les axes de travail du projet, avec pour chacun les object
 5. [Localisation et navigation autonome](#5-localisation-et-navigation-autonome)
 6. [Interface de gestion des zones](#6-interface-de-gestion-des-zones)
 7. [Intégration et tests système](#7-intégration-et-tests-système)
+8. [Analyse RDM du châssis](#8-analyse-rdm-du-châssis)
 
 ---
 
@@ -53,7 +54,7 @@ OpenCV, Python, PyTorch/Ultralytics (YOLOv8), Roboflow/CVAT pour l'annotation, c
 ---
 
 ## 2. Cinématique du bras manipulateur (MGD/MGI)
-![Niryo Ned1 DH axes](figures/axes_bras.jfif)
+
 **Objectif** : documenter et valider les modèles géométriques du bras (déjà construit et fonctionnel) pour permettre son pilotage à partir d'une position cible fournie par la vision, et son intégration logicielle avec l'UGV.
 
 ### Étapes
@@ -248,6 +249,83 @@ ROS2, Python/C++, `robot_localization`, `nav2`, simulation Gazebo avant test ré
 - Robot assemblé et fonctionnel
 - Rapport de tests système
 - Documentation finale et support de présentation
+
+---
+
+## 8. Analyse RDM du châssis
+
+**Objectif** : vérifier par le calcul que le châssis (longerons porteurs) résiste aux efforts statiques et dynamiques générés par le bras manipulateur et l'arrachage des mauvaises herbes.
+
+### 8.1 Hypothèses et données d'entrée
+
+Vérification à la flexion d'un longeron en profilé d'aluminium soumis aux efforts statiques et dynamiques lors du fonctionnement du robot et du bras Niryo Ned.
+
+| Paramètre | Symbole | Valeur |
+|---|---|---|
+| Matériau du châssis | - | Aluminium 6061-T6 |
+| Limite d'élasticité | Re | 240 MPa |
+| Module d'Young | E | 68,9 GPa |
+| Section extérieure (tube carré) | a | 40 mm |
+| Section intérieure | b | 34 mm |
+| Épaisseur du profilé | t | 3 mm |
+| Longueur entre appuis | L | 0,50 m |
+| Masse totale embarquée | Mtot | 35 kg |
+| Facteur d'impact dynamique | Kd | 2,0 |
+
+### 8.2 Bilan des charges appliquées
+
+Force dynamique globale appliquée au centre géométrique du châssis (poids du bras + effort vertical d'arrachage) :
+
+$$F_{centre} = (P_{bras} + F_{arrachage}) \cdot K_d = (68,7 + 30) \cdot 2,0 \approx 197,4 \text{ N}$$
+
+Charge ponctuelle équivalente retenue par longeron (sécurité + symétrie sur les deux longerons porteurs) :
+
+$$F = 200 \text{ N}$$
+
+### 8.3 Caractéristiques géométriques de la section
+
+Moment quadratique d'inertie pour une section tubulaire carrée :
+
+$$I_z = \frac{a^4 - b^4}{12} = \frac{40^4 - 34^4}{12} = 101972 \text{ mm}^4 = 1,02 \times 10^{-7} \text{ m}^4$$
+
+Module de flexion (avec v = a/2 = 20 mm) :
+
+$$\frac{I_z}{v} = \frac{101972}{20} = 5098,6 \text{ mm}^3 = 5,10 \times 10^{-6} \text{ m}^3$$
+
+### 8.4 Calcul des contraintes et de la flèche
+
+**Moment de flexion maximal** (charge centrée + moment induit par l'extension maximale du bras, d = 0,44 m) :
+
+$$M_{f,total} = \frac{F \cdot L}{4} + (F_{arrachage} \cdot d) = \frac{200 \cdot 0,50}{4} + (30 \cdot 0,44) = 25 + 13,2 = 38,2 \text{ N.m}$$
+
+**Contrainte maximale** :
+
+$$\sigma_{max} = \frac{M_{f,total}}{I_z / v} = \frac{38,2}{5,10 \times 10^{-6}} \approx 7,49 \text{ MPa}$$
+
+**Coefficient de sécurité** vis-à-vis de la limite d'élasticité :
+
+$$S_f = \frac{R_e}{\sigma_{max}} = \frac{240}{7,49} \approx 32$$
+
+**Déformation (flèche maximale)** au centre de la travée :
+
+$$\delta_{max} = \frac{F \cdot L^3}{48 \cdot E \cdot I_z} = \frac{200 \cdot (0,50)^3}{48 \cdot (68,9 \times 10^9) \cdot (1,02 \times 10^{-7})} \approx 0,074 \text{ mm}$$
+
+### 8.5 Pression de contact au sol
+
+Avec deux chenilles en caoutchouc de surface unitaire S1 = 0,45 × 0,06 m, la surface totale de contact est Stot = 0,054 m².
+
+$$P_{sol} = \frac{M_{tot} \cdot g}{S_{tot}} = \frac{35 \cdot 9,81}{0,054} \approx 6358 \text{ Pa} \approx 0,064 \text{ bar}$$
+
+### 8.6 Conclusion de l'analyse RDM
+
+- La contrainte subie (7,49 MPa) est négligeable face à la limite élastique du matériau (**Sf ≈ 32 ≫ 2**) : marge de sécurité très confortable.
+- La flèche (0,074 mm) reste inférieure à la tolérance de positionnement du bras robotique : pas d'impact sur la précision d'arrachage.
+- La faible pression au sol (≈ 0,064 bar) garantit la motricité sur sol meuble, sans risque de glissement ni d'enfoncement.
+
+### Livrables
+- Note de calcul RDM (hypothèses, charges, contraintes, flèche)
+- Choix matériau et section du profilé validés
+- Vérification de la pression au sol
 
 ---
 
