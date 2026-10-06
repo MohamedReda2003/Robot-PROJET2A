@@ -1,0 +1,2 @@
+- use liDar 360 for an overview
+- for the dashboard we can divide the big surface to multiple units to have a better control and view on the state of the whole surface
