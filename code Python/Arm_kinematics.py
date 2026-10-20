@@ -55,23 +55,58 @@ def geometric_jacobian(q, eps=1e-6):
         dq[i] += eps
         J[:,i] = (pose_vec(mgd(dq)) - p0) / eps
     return J
+def _wrap_pi(a):
+    return (a + np.pi) % (2 * np.pi) - np.pi
 
-def mgi(target_pose, q0=None, max_iter=200, tol=1e-6, damping=1e-3):
-    """MGI numérique (Newton-Raphson amorti / Levenberg-Marquardt).
-    target_pose : [x,y,z,roll,pitch,yaw] (m, rad)
-    q0 : estimation initiale (rad), défaut = position repos
-    Retourne q (rad, 6) ou lève une erreur si non convergé."""
-    q = np.array(q0 if q0 is not None else [0,-0.3,0.3,0,0,0], dtype=float)
-    target = np.array(target_pose, dtype=float)
+def _lm_step(target, q, max_iter=80):
+    """Une passe Levenberg-Marquardt à amortissement adaptatif, sans clip dur."""
+    q = np.clip(np.array(q, dtype=float), [l[0] for l in JOINT_LIMITS], [l[1] for l in JOINT_LIMITS])
+    lam = 1e-3
     for _ in range(max_iter):
         err = target - pose_vec(mgd(q))
-        if np.linalg.norm(err) < tol:
+        err[3:] = _wrap_pi(err[3:])
+        if np.linalg.norm(err[:3]) < 1e-4 and np.linalg.norm(err[3:]) < 1e-3:
             return q
         J = geometric_jacobian(q)
-        dq = np.linalg.solve(J.T@J + damping*np.eye(6), J.T@err)
-        q = q + dq
-        q = np.clip(q, [l[0] for l in JOINT_LIMITS], [l[1] for l in JOINT_LIMITS])
-    raise RuntimeError("MGI non convergé")
+        A = J.T @ J + lam * np.diag(np.diag(J.T @ J) + 1e-12)
+        try:
+            dq = np.linalg.solve(A, J.T @ err)
+        except np.linalg.LinAlgError:
+            return q
+        q_new = q + dq
+        err_new = target - pose_vec(mgd(q_new))
+        err_new[3:] = _wrap_pi(err_new[3:])
+        if err_new @ err_new < err @ err:
+            q, lam = q_new, max(lam / 3, 1e-9)
+        else:
+            lam = min(lam * 5, 1e6)
+    return q
+
+
+#def mgi(target_pose, q0=None, max_iter=200, tol=1e-6, damping=1e-3):
+def mgi(target_pose, q0=None):
+    """MGI multi-graines : essaie plusieurs branches, garde les solutions
+    dans les limites, retourne la plus proche des articulations courantes."""
+    target = np.array(target_pose, dtype=float)
+    low = np.array([l[0] for l in JOINT_LIMITS])
+    high = np.array([l[1] for l in JOINT_LIMITS])
+    seeds = [np.asarray(q0, float)] if q0 is not None else []
+    q1 = np.arctan2(target[1], target[0])
+    for q2, q3 in ((-1.2, -0.8), (-0.5, 0.5), (0.3, 1.2), (0.1, 0.6)):
+        seeds.append(np.array([q1, q2, q3, 0.0, -0.3, 0.0]))
+        seeds.append(np.array([q1, q2, q3, 0.0, 0.5, 0.0]))
+    cands = []
+    for s in seeds:
+        q = _lm_step(target, s)
+        e = target - pose_vec(mgd(q))
+        e[3:] = _wrap_pi(e[3:])
+        if (np.linalg.norm(e[:3]) < 1e-4 and np.linalg.norm(e[3:]) < 1e-3
+                and np.all(q >= low) and np.all(q <= high)):
+            cands.append(q)
+    if not cands:
+        raise RuntimeError("MGI non convergé")
+    base = np.asarray(q0, float) if q0 is not None else cands[0]
+    return min(cands, key=lambda q: np.linalg.norm(q - base))
 
 # --- Exemple d'utilisation avec le robot réel (PyNiryo) ---
 if __name__ == "__main__":

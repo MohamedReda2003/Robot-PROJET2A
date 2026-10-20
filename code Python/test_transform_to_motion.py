@@ -67,6 +67,12 @@ def validate_transform(transform):
         or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-6)
     ):
         raise ValueError("La partie rotation de la transformation n'est pas valide.")
+    
+def position_initiale(robot):
+    """Lit les angles articulaires courants et renvoie (x, y, z) via le MGD."""
+    q = robot.get_joints()
+    x, y, z = mgd(q)[:3, 3]
+    print(f"Position initiale : x={x:.3f} m, y={y:.3f} m, z={z:.3f} m")
 
 
 def main():
@@ -95,11 +101,23 @@ def main():
 
     robot = NiryoRobot(ROBOT_IP)
     try:
+        position_initiale(robot)
         robot.calibrate_auto()
         current_joints = np.asarray(robot.get_joints(), dtype=float)
         if current_joints.shape != (6,) or not np.isfinite(current_joints).all():
             raise RuntimeError("PyNiryo n'a pas retourné six angles articulaires valides.")
 
+        MAX_REACH = 0.539  # m, = 0.221326+0.0325+0.235+0.00925+0.0412
+        Z_MIN, Z_MAX = 0.02, 0.75  # à ajuster selon ta table/support
+
+        def check_reachable(x_cm, y_cm, z_cm):
+            r = np.hypot(x_cm, y_cm)
+            if r > MAX_REACH * 100:
+                raise ValueError(f"Hors de portée : distance radiale {r:.1f} cm > {MAX_REACH*100:.0f} cm max.")
+            if not (Z_MIN * 100 <= z_cm <= Z_MAX * 100):
+                raise ValueError(f"Hors de portée : Z={z_cm:.1f} cm hors de [{Z_MIN*100:.0f}, {Z_MAX*100:.0f}] cm.")
+
+        check_reachable(x_cm, y_cm, z_cm)
         target_joints = mgi(target_pose, q0=current_joints)
         if any(
             angle < lower - 1e-6 or angle > upper + 1e-6
@@ -132,6 +150,10 @@ def main():
         print(np.array2string(actual_pose, precision=6))
         print("Position estimée après le mouvement (cm) :")
         print(np.array2string(actual_pose[:3] * 100.0, precision=2))
+        pos_err = np.linalg.norm(actual_pose[:3] - target_pose[:3]) * 100
+        print(f"Écart position demandée/obtenue : {pos_err:.2f} cm")
+        if pos_err > 1.0:
+            print("ATTENTION : écart > 1 cm — vérifier calibration ou DH.")
         print("Test terminé.")
     finally:
         robot.close_connection()
