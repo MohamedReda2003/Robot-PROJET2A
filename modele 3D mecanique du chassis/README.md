@@ -1,5 +1,6 @@
 # Châssis mécanique — robot désherbeur autonome (UGV)
 
+| ![chassis UGV](images/image_chassis.png) | ![Vue de dessous](images/dessous.png) || ![Propriétés du chassis](images/proprietes.png) 
 Partie mécanique du projet ENSEA *« Développement d'un robot autonome pour la détection et l'élimination des mauvaises herbes par vision artificielle »*
 (équipe : Ryad KACHA, Wissem M'TIR, Mohamed Reda ZHAR, Omar MORAD).
 
