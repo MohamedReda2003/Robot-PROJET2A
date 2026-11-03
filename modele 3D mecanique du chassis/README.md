@@ -5,18 +5,6 @@ Partie mécanique du projet ENSEA *« Développement d'un robot autonome pour la
 
 Châssis en **PPA-CF** (impression 3D FDM) portant le bras Niryo Ned 1, l'électronique, la batterie et deux chenilles caoutchouc. Choix du matériau et dimensionnement du longeron : voir la note de cadrage (§4).
 
-## Contenu du dépôt
-
-```
-mecanique/chassis/
-├── README.md
-├── docs/Dossier_chassis_UGV_PPA-CF.pdf   # dossier de définition : exigences, architecture, plans cotés, nomenclature, validation
-├── cad/
-│   ├── Assemblage_chassis_UGV.step       # assemblage complet (35 pièces + moteurs/chenilles de référence)
-│   ├── step/                             # 1 STEP par pièce (modèles paramétrables)
-│   └── stl/                              # 1 STL par pièce, orientation d'impression, prêt à trancher
-└── scripts/                              # génération CAO (CadQuery / trimesh)
-```
 
 ## Architecture
 
@@ -74,12 +62,5 @@ Buse trempée/rubis 275–290 °C, filament séché 80–100 °C pendant ≥ 8 h
 - Les trous du manchon, au milieu du longeron (flexion maximale), donnent un coefficient de sécurité estimé ≈ 4,7 (contre 14,7 pour le tube plein) : à valider par essai ou simulation.
 - Aucune simulation éléments finis réalisée à ce stade.
 
-## Régénérer les modèles
 
-```bash
-pip install cadquery trimesh manifold3d numpy shapely
-python scripts/generate_step.py      # STEP par pièce
-python scripts/generate_stl.py       # STL par pièce
-python scripts/generate_assembly.py  # assemblage STEP + contrôle d'interférences
-```
 Les cotes sont des paramètres en tête de chaque script ; adapter le chemin de sortie (`out`) si besoin.
