@@ -1,160 +1,220 @@
-"""Test matériel : saisit XYZ en cm, calcule la cible puis déplace le bras.
-
-Lancer avec l'interpréteur de l'environnement du projet :
-    python test_transform_to_motion.py
-
-L'orientation de l'outil reste fixe selon TOOL_ORIENTATION (rad).
-"""
-
+import time
 import numpy as np
 from pyniryo import NiryoRobot
+from Arm_kinematics import (
+    JOINT_LIMITS, mgd, mgi, pose_vec, pose_to_matrix,
+    joint_interpolation, is_in_limits, validate_target_reachable,
+    check_singularity
+)
 
-from Arm_kinematics import JOINT_LIMITS, mgd, mgi, pose_vec
-
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
 
 ROBOT_IP = "10.10.3.156"
 
-# Orientation outil fixe (roll, pitch, yaw), en radians.
-# Les coordonnées saisies sont exprimées par rapport à la base du robot.
+# Orientation par défaut de l'outil (roll, pitch, yaw en rad)
 TOOL_ORIENTATION = (0.0, -0.3, 0.1)
 
+# Paramètres de trajectoire
+N_STEPS = 50          # nombre de waypoints par mouvement
+STEP_DELAY = 0.05     # délai entre waypoints (s) → ~2.5 s pour 50 waypoints
+SPEED_RATIO = 0.8     # ratio de vitesse PyNiryo [0.1, 1.0]
 
-def build_target_transform(x_cm, y_cm, z_cm):
-    """Construit la transformation cible à partir de XYZ en centimètres."""
-    xyz_m = np.asarray([x_cm, y_cm, z_cm], dtype=float) / 100.0
-    if not np.isfinite(xyz_m).all():
-        raise ValueError("Les coordonnées doivent être des nombres finis.")
-
-    roll, pitch, yaw = TOOL_ORIENTATION
-    cr, sr = np.cos(roll), np.sin(roll)
-    cp, sp = np.cos(pitch), np.sin(pitch)
-    cy, sy = np.cos(yaw), np.sin(yaw)
-    rotation = np.array(
-        [
-            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
-            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
-            [-sp, cp * sr, cp * cr],
-        ]
-    )
-
-    transform = np.eye(4)
-    transform[:3, :3] = rotation
-    transform[:3, 3] = xyz_m
-    return transform
+# Limites de sécurité (espace de travail effectif)
+WORKSPACE_X = (0.10, 0.45)   # m
+WORKSPACE_Y = (-0.30, 0.30)  # m
+WORKSPACE_Z = (0.02, 0.55)   # m
 
 
-def read_coordinate(name):
+# ============================================================================
+# FONCTIONS UTILITAIRES
+# ============================================================================
+
+def read_coordinate(name: str) -> float:
+    """Lit une coordonnée au clavier avec validation."""
     while True:
         try:
             value = float(input(f"Entrez {name} en cm : ").replace(",", "."))
         except ValueError:
-            print("Valeur invalide : entrez un nombre, par exemple 34.87.")
+            print("  Valeur invalide : entrez un nombre, par exemple 34.87.")
             continue
         if np.isfinite(value):
             return value
-        print("La coordonnée doit être un nombre fini.")
+        print("  La coordonnée doit être un nombre fini.")
 
 
-def validate_transform(transform):
-    if transform.shape != (4, 4) or not np.isfinite(transform).all():
-        raise ValueError("La transformation cible doit être une matrice 4x4 finie.")
-    if not np.allclose(transform[3], [0.0, 0.0, 0.0, 1.0], atol=1e-9):
-        raise ValueError("La dernière ligne de la transformation doit être [0, 0, 0, 1].")
+def read_orientation() -> tuple:
+    """Lit l'orientation RPY optionnelle (sinon utilise la valeur par défaut)."""
+    use_default = input(
+        f"Utiliser l'orientation par défaut RPY={TOOL_ORIENTATION} ? [O/n] : "
+    ).strip().lower()
+    if use_default not in ("n", "non", "no"):
+        return TOOL_ORIENTATION
+    try:
+        r = float(input("  Roll (rad) : ").replace(",", "."))
+        p = float(input("  Pitch (rad) : ").replace(",", "."))
+        y = float(input("  Yaw (rad) : ").replace(",", "."))
+        return (r, p, y)
+    except ValueError:
+        print("  Valeur invalide, retour à l'orientation par défaut.")
+        return TOOL_ORIENTATION
 
-    rotation = transform[:3, :3]
-    if (
-        not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-6)
-        or not np.isclose(np.linalg.det(rotation), 1.0, atol=1e-6)
-    ):
-        raise ValueError("La partie rotation de la transformation n'est pas valide.")
-    
-def position_initiale(robot):
-    """Lit les angles articulaires courants et renvoie (x, y, z) via le MGD."""
-    q = robot.get_joints()
-    x, y, z = mgd(q)[:3, 3]
-    print(f"Position initiale : x={x:.3f} m, y={y:.3f} m, z={z:.3f} m")
 
+def build_target_pose(x_cm: float, y_cm: float, z_cm: float,
+                      orientation: tuple) -> np.ndarray:
+    """Construit la pose cible [x, y, z, roll, pitch, yaw] en m et rad."""
+    xyz_m = np.asarray([x_cm, y_cm, z_cm], dtype=float) / 100.0
+    return np.concatenate([xyz_m, np.asarray(orientation, dtype=float)])
+
+
+def validate_workspace(x_cm: float, y_cm: float, z_cm: float) -> None:
+    """Vérifie que la cible est dans l'espace de travail effectif."""
+    x_m, y_m, z_m = x_cm / 100.0, y_cm / 100.0, z_cm / 100.0
+    if not (WORKSPACE_X[0] <= x_m <= WORKSPACE_X[1]):
+        raise ValueError(
+            f"X={x_cm:.1f} cm hors de [{WORKSPACE_X[0]*100:.0f}, {WORKSPACE_X[1]*100:.0f}] cm"
+        )
+    if not (WORKSPACE_Y[0] <= y_m <= WORKSPACE_Y[1]):
+        raise ValueError(
+            f"Y={y_cm:.1f} cm hors de [{WORKSPACE_Y[0]*100:.0f}, {WORKSPACE_Y[1]*100:.0f}] cm"
+        )
+    if not (WORKSPACE_Z[0] <= z_m <= WORKSPACE_Z[1]):
+        raise ValueError(
+            f"Z={z_cm:.1f} cm hors de [{WORKSPACE_Z[0]*100:.0f}, {WORKSPACE_Z[1]*100:.0f}] cm"
+        )
+
+
+def execute_trajectory(robot: NiryoRobot, q_trajectory: np.ndarray) -> None:
+    """Exécute une trajectoire articulaire waypoint par waypoint.
+    À chaque waypoint : vérifie limites + singularité + envoie commande.
+    """
+    for i, q_wp in enumerate(q_trajectory):
+        # Vérifications de sécurité
+        if not is_in_limits(q_wp):
+            raise RuntimeError(
+                f"Waypoint {i} hors limites articulaires : {q_wp}"
+            )
+        # Envoi de la commande (PyNiryo move_joints accepte 6 arguments)
+        robot.move_joints(*q_wp.tolist())
+        time.sleep(STEP_DELAY)
+
+
+# ============================================================================
+# PROGRAMME PRINCIPAL
+# ============================================================================
 
 def main():
-    print("Saisissez la position cible de l'outil dans le repère de base du robot.")
+    print("=" * 60)
+    print("Test de mouvement amélioré — Bras Niryo Ned")
+    print("=" * 60)
+    print("\nSaisissez la position cible (cm) dans le repère base du robot :")
     x_cm = read_coordinate("X")
     y_cm = read_coordinate("Y")
     z_cm = read_coordinate("Z")
 
-    target_transform = build_target_transform(x_cm, y_cm, z_cm)
-    validate_transform(target_transform)
-    target_pose = pose_vec(target_transform)
+    orientation = read_orientation()
+    target_pose = build_target_pose(x_cm, y_cm, z_cm, orientation)
 
-    print("\nTransformation cible outil/base (translation en mètres) :")
-    print(target_transform)
-    print("\nPose cible [x, y, z, roll, pitch, yaw] (m, rad) :")
-    print(np.array2string(target_pose, precision=6))
+    # Étape 1 : validation locale (avant connexion robot)
+    print("\n[1/5] Validation de la cible (locale)...")
+    try:
+        validate_workspace(x_cm, y_cm, z_cm)
+    except ValueError as e:
+        print(f"  ✗ Cible hors espace de travail : {e}")
+        return
+    reachable, msg = validate_target_reachable(target_pose)
+    if not reachable:
+        print(f"  ✗ Cible non atteignable : {msg}")
+        return
+    print(f"  ✓ Cible valide : {msg}")
 
-    if input("\nConnecter et calibrer le robot ? [o/N] ").strip().lower() not in {
-        "o",
-        "oui",
-        "y",
-        "yes",
-    }:
-        print("Test annulé, aucune connexion ni aucun mouvement effectué.")
+    # Étape 2 : résolution MGI locale (test rapide)
+    print("\n[2/5] Résolution MGI locale (sans connexion robot)...")
+    # Graine : configuration milieu de limites
+    q_seed = np.array([(l[0] + l[1]) / 2 for l in JOINT_LIMITS])
+    try:
+        target_joints = mgi(target_pose, q0=q_seed)
+    except RuntimeError as e:
+        print(f"  ✗ MGI échoué : {e}")
+        print("  Cause possible : cible hors workspace ou orientation irréalisable.")
         return
 
+    # Vérification limites
+    if not is_in_limits(target_joints):
+        print(f"  ✗ Solution MGI hors limites : {target_joints}")
+        return
+
+    # Vérification singularité
+    is_sing, manip = check_singularity(target_joints)
+    if is_sing:
+        print(f"  ⚠ Configuration finale singulière (manipulabilité = {manip:.4f})")
+        print("    Le mouvement peut être imprécis. Ajustez la cible si nécessaire.")
+    else:
+        print(f"  ✓ Manipulabilité : {manip:.4f} (configuration saine)")
+
+    print(f"\n  Articulations calculées (rad) :")
+    print(f"  {np.array2string(target_joints, precision=4)}")
+    print(f"\n  Pose cible  [m, rad] : {np.array2string(target_pose, precision=4)}")
+    print(f"  Pose calculée par MGD : {np.array2string(pose_vec(mgd(target_joints)), precision=4)}")
+
+    # Étape 3 : confirmation utilisateur
+    print("\n[3/5] Confirmation utilisateur")
+    confirm = input("Connecter et déplacer le robot ? [o/N] : ").strip().lower()
+    if confirm not in ("o", "oui", "y", "yes"):
+        print("  Mouvement annulé.")
+        return
+
+    # Étape 4 : connexion robot + lecture position courante
+    print("\n[4/5] Connexion au robot...")
     robot = NiryoRobot(ROBOT_IP)
     try:
-        position_initiale(robot)
         robot.calibrate_auto()
         current_joints = np.asarray(robot.get_joints(), dtype=float)
-        if current_joints.shape != (6,) or not np.isfinite(current_joints).all():
-            raise RuntimeError("PyNiryo n'a pas retourné six angles articulaires valides.")
+        print(f"  Position courante (rad) : {np.array2string(current_joints, precision=4)}")
+        current_pose = pose_vec(mgd(current_joints))
+        print(f"  Pose courante [m, rad] : {np.array2string(current_pose, precision=4)}")
 
-        MAX_REACH = 0.539  # m, = 0.221326+0.0325+0.235+0.00925+0.0412
-        Z_MIN, Z_MAX = 0.02, 0.75  # à ajuster selon ta table/support
+        # Étape 5 : génération et exécution de la trajectoire
+        print(f"\n[5/5] Génération trajectoire ({N_STEPS} waypoints, "
+              f"profil trapézoïdal)...")
+        trajectory = joint_interpolation(current_joints, target_joints, n_steps=N_STEPS)
 
-        def check_reachable(x_cm, y_cm, z_cm):
-            r = np.hypot(x_cm, y_cm)
-            if r > MAX_REACH * 100:
-                raise ValueError(f"Hors de portée : distance radiale {r:.1f} cm > {MAX_REACH*100:.0f} cm max.")
-            if not (Z_MIN * 100 <= z_cm <= Z_MAX * 100):
-                raise ValueError(f"Hors de portée : Z={z_cm:.1f} cm hors de [{Z_MIN*100:.0f}, {Z_MAX*100:.0f}] cm.")
+        # Vérification de tous les waypoints avant envoi
+        print("  Vérification des waypoints...")
+        for i, q_wp in enumerate(trajectory):
+            if not is_in_limits(q_wp):
+                raise RuntimeError(
+                    f"Waypoint {i} hors limites : {q_wp}. "
+                    "Arrêt immédiat pour sécurité."
+                )
+        print(f"  ✓ {len(trajectory)} waypoints validés")
 
-        check_reachable(x_cm, y_cm, z_cm)
-        target_joints = mgi(target_pose, q0=current_joints)
-        if any(
-            angle < lower - 1e-6 or angle > upper + 1e-6
-            for angle, (lower, upper) in zip(target_joints, JOINT_LIMITS)
-        ):
-            raise RuntimeError("La solution MGI dépasse les limites articulaires configurées.")
+        # Exécution
+        print(f"  Exécution du mouvement ({N_STEPS * STEP_DELAY:.1f}s)...")
+        execute_trajectory(robot, trajectory)
 
-        print("\nArticulations actuelles (rad) :")
-        print(np.array2string(current_joints, precision=4))
-        print("Articulations calculées par le MGI (rad) :")
-        print(np.array2string(target_joints, precision=4))
-        print("Position demandée (cm) :", (x_cm, y_cm, z_cm))
-
-        if input("\nEnvoyer ce mouvement au robot ? [o/N] ").strip().lower() not in {
-            "o",
-            "oui",
-            "y",
-            "yes",
-        }:
-            print("Mouvement annulé.")
-            return
-
-        robot.move_joints(*target_joints.tolist())
+        # Vérification finale
         actual_joints = np.asarray(robot.get_joints(), dtype=float)
         actual_pose = pose_vec(mgd(actual_joints))
-
-        print("\nArticulations après le mouvement (rad) :")
-        print(np.array2string(actual_joints, precision=4))
-        print("Pose estimée après le mouvement [x, y, z, roll, pitch, yaw] (m, rad) :")
-        print(np.array2string(actual_pose, precision=6))
-        print("Position estimée après le mouvement (cm) :")
-        print(np.array2string(actual_pose[:3] * 100.0, precision=2))
         pos_err = np.linalg.norm(actual_pose[:3] - target_pose[:3]) * 100
-        print(f"Écart position demandée/obtenue : {pos_err:.2f} cm")
+        orient_err = np.linalg.norm(actual_pose[3:] - target_pose[3:])
+
+        print(f"\n  Articulations finales (rad) :")
+        print(f"  {np.array2string(actual_joints, precision=4)}")
+        print(f"  Pose finale [m, rad] :")
+        print(f"  {np.array2string(actual_pose, precision=4)}")
+        print(f"\n  Écart position  : {pos_err:.2f} cm")
+        print(f"  Écart orientation : {orient_err:.4f} rad")
+
         if pos_err > 1.0:
-            print("ATTENTION : écart > 1 cm — vérifier calibration ou DH.")
-        print("Test terminé.")
+            print("  ⚠ ATTENTION : écart position > 1 cm")
+            print("    Causes possibles : calibration, DH parameters, "
+                  "backlash moteur, ou singularité proche.")
+        else:
+            print("  ✓ Mouvement réussi dans la tolérance")
+
+        print("\nTest terminé.")
     finally:
         robot.close_connection()
 
